@@ -3,6 +3,7 @@ use ndarray::{s, Array, Axis, IxDyn};
 use ort::{
     execution_providers::{
         CPUExecutionProviderOptions, CUDAExecutionProviderOptions, ExecutionProvider,
+        TensorRTExecutionProviderOptions,
     },
     Environment, SessionBuilder, Value,
 };
@@ -83,6 +84,7 @@ fn run_model(input: Array<f32, IxDyn>) -> Array<f32, IxDyn> {
         Environment::builder()
             .with_name("YOLOv8")
             .with_execution_providers([
+                ExecutionProvider::TensorRT(TensorRTExecutionProviderOptions::default()),
                 ExecutionProvider::CUDA(CUDAExecutionProviderOptions::default()),
                 ExecutionProvider::CPU(CPUExecutionProviderOptions::default()),
             ])
@@ -194,10 +196,13 @@ fn intersection(
 }
 
 fn print_execution_provider() {
+    let tensor_rt = ExecutionProvider::TensorRT(TensorRTExecutionProviderOptions::default());
     let cuda = ExecutionProvider::CUDA(CUDAExecutionProviderOptions::default());
     let cpu = ExecutionProvider::CPU(CPUExecutionProviderOptions::default());
 
-    if cuda.is_available() {
+    if tensor_rt.is_available() {
+        println!("ใช้ TensorRT Execution Provider");
+    } else if cuda.is_available() {
         println!("ใช้ CUDA Execution Provider");
     } else if cpu.is_available() {
         println!("ใช้ CPU Execution Provider");
