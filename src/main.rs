@@ -1,14 +1,13 @@
 use image::{imageops::FilterType, GenericImageView};
 use ndarray::{s, Array, Axis, IxDyn};
 use ort::{
-    execution_providers::{
-        CPUExecutionProviderOptions, CUDAExecutionProviderOptions, ExecutionProvider,
-        TensorRTExecutionProviderOptions,
-    },
-    Environment, SessionBuilder, Value,
+    execution_providers::{CUDAExecutionProvider, TensorRTExecutionProvider},
+    session::Session,
+    value::Tensor,
+    Result as OrtResult,
 };
 use rocket::{form::Form, fs::TempFile, response::content};
-use std::{path::Path, sync::Arc, vec};
+use std::{path::Path, vec};
 use dotenv::dotenv;
 
 #[macro_use]
@@ -57,7 +56,10 @@ fn detect(file: Form<TempFile<'_>>) -> String {
 // Returns Array of bounding boxes in format [(x1,y1,x2,y2,object_type,probability),..]
 fn detect_objects_on_image(buf: Vec<u8>) -> Vec<(f32, f32, f32, f32, &'static str, f32)> {
     let (input, img_width, img_height) = prepare_input(buf);
-    let output = run_model(input);
+    let output = run_model(input).unwrap_or_else(|e| {
+        eprintln!("Error running model: {}", e);
+        Array::zeros((0, 0)).into_dyn()
+    });
     return process_output(output, img_width, img_height);
 }
 
@@ -84,34 +86,22 @@ fn prepare_input(buf: Vec<u8>) -> (Array<f32, IxDyn>, u32, u32) {
 // Function used to pass provided input tensor to
 // YOLOv8 neural network and return result
 // Returns raw output of YOLOv8 network
-fn run_model(input: Array<f32, IxDyn>) -> Array<f32, IxDyn> {
-    let env = Arc::new(
-        Environment::builder()
-            .with_name("YOLOv8")
-            .with_execution_providers([
-                ExecutionProvider::TensorRT(TensorRTExecutionProviderOptions::default()),
-                ExecutionProvider::CUDA(CUDAExecutionProviderOptions::default()),
-                ExecutionProvider::CPU(CPUExecutionProviderOptions::default()),
-            ])
-            .build()
-            .unwrap(),
-    );
-    let model = SessionBuilder::new(&env)
-        .unwrap()
-        .with_model_from_file("yolov8m.onnx")
-        .unwrap();
-    let input_as_values = &input.as_standard_layout();
-    let model_inputs = vec![Value::from_array(model.allocator(), input_as_values).unwrap()];
-    let outputs = model.run(model_inputs).unwrap();
-    let output = outputs
-        .get(0)
-        .unwrap()
-        .try_extract::<f32>()
-        .unwrap()
-        .view()
-        .t()
-        .into_owned();
-    return output;
+fn run_model(input: Array<f32, IxDyn>) -> OrtResult<Array<f32, IxDyn>> {
+    // Initialize environment with execution providers
+    ort::init()
+        .with_execution_providers([
+            TensorRTExecutionProvider::default().build(),
+            CUDAExecutionProvider::default().build(),
+        ])
+        .commit()?;
+
+    let mut session = Session::builder()?
+        .commit_from_file("yolov8m.onnx")?;
+
+    let input_tensor = Tensor::from_array(input)?;
+    let outputs = session.run(ort::inputs![input_tensor])?;
+    let output = outputs["output0"].try_extract_array::<f32>()?;
+    Ok(output.t().into_owned())
 }
 
 // Function used to convert RAW output from YOLOv8 to an array
