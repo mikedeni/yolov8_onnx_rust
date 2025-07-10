@@ -90,7 +90,7 @@ fn run_model(input: Array<f32, IxDyn>) -> OrtResult<Array<f32, IxDyn>> {
     // Initialize environment with execution providers
     ort::init()
         .with_execution_providers([
-            TensorRTExecutionProvider::default().build(),
+            TensorRTExecutionProvider::default().with_engine_cache(true).build(),
             CUDAExecutionProvider::default().build(),
         ])
         .commit()?;
