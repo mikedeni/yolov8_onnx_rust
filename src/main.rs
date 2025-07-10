@@ -9,6 +9,8 @@ use ort::{
 };
 use rocket::{form::Form, fs::TempFile, response::content};
 use std::{path::Path, sync::Arc, vec};
+use dotenv::dotenv;
+
 #[macro_use]
 extern crate rocket;
 
@@ -17,6 +19,10 @@ extern crate rocket;
 // the web service
 #[rocket::main]
 async fn main() {
+    dotenv().ok();
+
+    tracing_subscriber::fmt::init();
+
     rocket::build()
         .mount("/", routes![index])
         .mount("/detect", routes![detect])
@@ -79,7 +85,6 @@ fn prepare_input(buf: Vec<u8>) -> (Array<f32, IxDyn>, u32, u32) {
 // YOLOv8 neural network and return result
 // Returns raw output of YOLOv8 network
 fn run_model(input: Array<f32, IxDyn>) -> Array<f32, IxDyn> {
-    print_execution_provider();
     let env = Arc::new(
         Environment::builder()
             .with_name("YOLOv8")
@@ -193,22 +198,6 @@ fn intersection(
     let x2 = box1_x2.min(box2_x2);
     let y2 = box1_y2.min(box2_y2);
     return (x2 - x1) * (y2 - y1);
-}
-
-fn print_execution_provider() {
-    let tensor_rt = ExecutionProvider::TensorRT(TensorRTExecutionProviderOptions::default());
-    let cuda = ExecutionProvider::CUDA(CUDAExecutionProviderOptions::default());
-    let cpu = ExecutionProvider::CPU(CPUExecutionProviderOptions::default());
-
-    if tensor_rt.is_available() {
-        println!("ใช้ TensorRT Execution Provider");
-    } else if cuda.is_available() {
-        println!("ใช้ CUDA Execution Provider");
-    } else if cpu.is_available() {
-        println!("ใช้ CPU Execution Provider");
-    } else {
-        println!("ไม่พบ Execution Provider ที่พร้อมใช้งาน");
-    }
 }
 
 // Array of YOLOv8 class labels
