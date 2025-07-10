@@ -2,7 +2,7 @@ use image::{imageops::FilterType, GenericImageView};
 use ndarray::{s, Array, Axis, IxDyn};
 use ort::{
     execution_providers::{CUDAExecutionProvider, TensorRTExecutionProvider},
-    session::Session,
+    session::{Session, builder::GraphOptimizationLevel},
     value::Tensor,
     Result as OrtResult,
 };
@@ -95,13 +95,15 @@ fn run_model(input: Array<f32, IxDyn>) -> OrtResult<Array<f32, IxDyn>> {
         ])
         .commit()?;
 
-    let mut session = Session::builder()?
+    let mut model = Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_intra_threads(4)?
         .commit_from_file("yolov8m.onnx")?;
 
     let input_tensor = Tensor::from_array(input)?;
-    let outputs = session.run(ort::inputs![input_tensor])?;
-    let output = outputs["output0"].try_extract_array::<f32>()?;
-    Ok(output.t().into_owned())
+    let outputs = model.run(ort::inputs![input_tensor])?;
+    let predictions = outputs["output0"].try_extract_array::<f32>()?;
+    Ok(predictions.t().into_owned())
 }
 
 // Function used to convert RAW output from YOLOv8 to an array
