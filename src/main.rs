@@ -1,14 +1,14 @@
+use dotenv::dotenv;
 use image::{imageops::FilterType, GenericImageView};
 use ndarray::{s, Array, Axis, IxDyn};
 use ort::{
     execution_providers::{CUDAExecutionProvider, TensorRTExecutionProvider},
-    session::{Session, builder::GraphOptimizationLevel},
+    session::{builder::GraphOptimizationLevel, Session},
     value::Tensor,
     Result as OrtResult,
 };
 use rocket::{form::Form, fs::TempFile, response::content};
 use std::{path::Path, vec};
-use dotenv::dotenv;
 
 #[macro_use]
 extern crate rocket;
@@ -90,7 +90,10 @@ fn run_model(input: Array<f32, IxDyn>) -> OrtResult<Array<f32, IxDyn>> {
     // Initialize environment with execution providers
     ort::init()
         .with_execution_providers([
-            TensorRTExecutionProvider::default().with_engine_cache(true).build(),
+            TensorRTExecutionProvider::default()
+                .with_fp16(true)
+                .with_engine_cache(true)
+                .build(),
             CUDAExecutionProvider::default().build(),
         ])
         .commit()?;
