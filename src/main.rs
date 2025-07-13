@@ -7,8 +7,39 @@ use ort::{
     value::Tensor,
     Result as OrtResult,
 };
-use rocket::{form::Form, fs::TempFile, response::content};
-use std::{path::Path, vec};
+use rocket::{form::Form, fs::TempFile, response::content, State};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    vec,
+};
+
+pub struct ModelState {
+    pub session: Arc<Mutex<Session>>,
+}
+
+impl ModelState {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        ort::init()
+            .with_execution_providers([
+                TensorRTExecutionProvider::default()
+                    .with_fp16(true)
+                    .with_engine_cache(true)
+                    .build(),
+                CUDAExecutionProvider::default().build(),
+            ])
+            .commit()?;
+
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(4)?
+            .commit_from_file("yolov8m.onnx")?;
+
+        Ok(ModelState {
+            session: Arc::new(Mutex::new(session)),
+        })
+    }
+}
 
 #[macro_use]
 extern crate rocket;
@@ -22,7 +53,10 @@ async fn main() {
 
     tracing_subscriber::fmt::init();
 
+    let model_state = ModelState::new().expect("Failed to load model");
+
     rocket::build()
+        .manage(model_state)
         .mount("/", routes![index])
         .mount("/detect", routes![detect])
         .launch()
@@ -43,9 +77,9 @@ fn index() -> content::RawHtml<String> {
 // of bounding boxes.
 // Returns a JSON array of objects bounding boxes in format [(x1,y1,x2,y2,object_type,probability),..]
 #[post("/", data = "<file>")]
-fn detect(file: Form<TempFile<'_>>) -> String {
+fn detect(file: Form<TempFile<'_>>, model_state: &State<ModelState>) -> String {
     let buf = std::fs::read(file.path().unwrap_or(Path::new(""))).unwrap_or(vec![]);
-    let boxes = detect_objects_on_image(buf);
+    let boxes = detect_objects_on_image(buf, &model_state.session);
     return serde_json::to_string(&boxes).unwrap_or_default();
 }
 
@@ -54,9 +88,13 @@ fn detect(file: Form<TempFile<'_>>) -> String {
 // and returns an array of detected objects
 // and their bounding boxes
 // Returns Array of bounding boxes in format [(x1,y1,x2,y2,object_type,probability),..]
-fn detect_objects_on_image(buf: Vec<u8>) -> Vec<(f32, f32, f32, f32, &'static str, f32)> {
+fn detect_objects_on_image(
+    buf: Vec<u8>,
+    session_mutex: &Arc<Mutex<Session>>,
+) -> Vec<(f32, f32, f32, f32, &'static str, f32)> {
     let (input, img_width, img_height) = prepare_input(buf);
-    let output = run_model(input).unwrap_or_else(|e| {
+    let mut session_guard = session_mutex.lock().unwrap();
+    let output = run_model(input, &mut *session_guard).unwrap_or_else(|e| {
         eprintln!("Error running model: {}", e);
         Array::zeros((0, 0)).into_dyn()
     });
@@ -86,25 +124,9 @@ fn prepare_input(buf: Vec<u8>) -> (Array<f32, IxDyn>, u32, u32) {
 // Function used to pass provided input tensor to
 // YOLOv8 neural network and return result
 // Returns raw output of YOLOv8 network
-fn run_model(input: Array<f32, IxDyn>) -> OrtResult<Array<f32, IxDyn>> {
-    // Initialize environment with execution providers
-    ort::init()
-        .with_execution_providers([
-            TensorRTExecutionProvider::default()
-                .with_fp16(true)
-                .with_engine_cache(true)
-                .build(),
-            CUDAExecutionProvider::default().build(),
-        ])
-        .commit()?;
-
-    let mut model = Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(4)?
-        .commit_from_file("yolov8m.onnx")?;
-
+fn run_model(input: Array<f32, IxDyn>, session: &mut Session) -> OrtResult<Array<f32, IxDyn>> {
     let input_tensor = Tensor::from_array(input)?;
-    let outputs = model.run(ort::inputs![input_tensor])?;
+    let outputs = session.run(ort::inputs![input_tensor])?;
     let predictions = outputs["output0"].try_extract_array::<f32>()?;
     Ok(predictions.t().into_owned())
 }
